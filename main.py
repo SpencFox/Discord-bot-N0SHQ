@@ -25,6 +25,11 @@ CHECK_INTERVAL_HOURS = 6
 # Súbor na ukladanie již oznámených hier (aby sa neopakovali)
 SEEN_GAMES_FILE = "seen_games.json"
 
+# User-Agent aby Steam neblokoval requesty
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+}
+
 # ══════════════════════════════════════════
 #  INICIALIZÁCIA BOTA
 # ══════════════════════════════════════════
@@ -125,47 +130,74 @@ async def get_epic_free_games():
 
 
 # ══════════════════════════════════════════
-#  STEAM – Veľké zľavy (Steam Search API)
+#  STEAM – Free hry + Veľké zľavy
 # ══════════════════════════════════════════
 
 async def get_steam_deals():
-    url = "https://store.steampowered.com/search/results/?specials=1&json=1&count=50&cc=sk"
     deals = []
+
+    # --- Free hry (100% zľava) ---
+    free_url = "https://store.steampowered.com/search/results/?maxprice=free&specials=1&json=1&count=20&cc=sk"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    return deals
-                data = await resp.json(content_type=None)
-
-        items = data.get("items", [])
-        for item in items:
-            name = item.get("name", "")
-            appid = str(item.get("id", ""))
-            discount = item.get("discount_percent", 0)
-
-            if discount < MIN_STEAM_DISCOUNT:
-                continue
-
-            price_data = item.get("price") or {}
-            original = price_data.get("initial", 0) / 100
-            final = price_data.get("final", 0) / 100
-            img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
-            url_game = f"https://store.steampowered.com/app/{appid}/"
-
-            deals.append({
-                "title": name,
-                "url": url_game,
-                "image": img,
-                "discount": discount,
-                "original_price": original,
-                "final_price": final,
-                "type": "steam_deal",
-                "source": "Steam",
-                "appid": appid,
-            })
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.get(free_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    for item in data.get("items", []):
+                        appid = str(item.get("id", ""))
+                        name = item.get("name", "")
+                        if not appid or not name:
+                            continue
+                        img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+                        url_game = f"https://store.steampowered.com/app/{appid}/"
+                        deals.append({
+                            "title": name,
+                            "url": url_game,
+                            "image": img,
+                            "discount": 100,
+                            "original_price": 0,
+                            "final_price": 0,
+                            "type": "steam_free",
+                            "source": "Steam",
+                            "appid": appid,
+                        })
     except Exception as e:
-        print(f"[Steam] Chyba: {e}")
+        print(f"[Steam Free] Chyba: {e}")
+
+    # --- Veľké zľavy ---
+    deals_url = "https://store.steampowered.com/search/results/?specials=1&json=1&count=50&cc=sk"
+    try:
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.get(deals_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    for item in data.get("items", []):
+                        discount = item.get("discount_percent", 0)
+                        if discount < MIN_STEAM_DISCOUNT:
+                            continue
+                        appid = str(item.get("id", ""))
+                        name = item.get("name", "")
+                        if not appid or not name:
+                            continue
+                        price_data = item.get("price") or {}
+                        original = price_data.get("initial", 0) / 100
+                        final = price_data.get("final", 0) / 100
+                        img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+                        url_game = f"https://store.steampowered.com/app/{appid}/"
+                        deals.append({
+                            "title": name,
+                            "url": url_game,
+                            "image": img,
+                            "discount": discount,
+                            "original_price": original,
+                            "final_price": final,
+                            "type": "steam_deal",
+                            "source": "Steam",
+                            "appid": appid,
+                        })
+    except Exception as e:
+        print(f"[Steam Deals] Chyba: {e}")
+
     return deals
 
 
@@ -208,21 +240,32 @@ def make_epic_embed(game: dict) -> discord.Embed:
 
 
 def make_steam_embed(deal: dict) -> discord.Embed:
-    color = 0xE74C3C if deal["discount"] >= 90 else 0x3498DB
-    label = "🔥 MEGA ZĽAVA" if deal["discount"] >= 90 else "💸 Veľká zľava"
-
-    title = f"{label} na Steame: {deal['title']}"
-    desc = (
-        f"**{deal['title']}** má aktuálne obrovskú zľavu na Steame!\n\n"
-        f"~~{deal['original_price']:.2f} €~~ → **{deal['final_price']:.2f} €**  "
-        f"(**-{deal['discount']}%**)"
-    )
+    if deal["type"] == "steam_free":
+        color = 0x2ECC71
+        title = f"🎮 ZADARMO na Steame: {deal['title']}"
+        desc = f"**{deal['title']}** je teraz dostupná **úplne zadarmo** na Steame!"
+    elif deal["discount"] >= 90:
+        color = 0xE74C3C
+        title = f"🔥 MEGA ZĽAVA na Steame: {deal['title']}"
+        desc = (
+            f"**{deal['title']}** má obrovskú zľavu!\n\n"
+            f"~~{deal['original_price']:.2f} €~~ → **{deal['final_price']:.2f} €**  "
+            f"(**-{deal['discount']}%**)"
+        )
+    else:
+        color = 0x3498DB
+        title = f"💸 Veľká zľava na Steame: {deal['title']}"
+        desc = (
+            f"**{deal['title']}** má veľkú zľavu!\n\n"
+            f"~~{deal['original_price']:.2f} €~~ → **{deal['final_price']:.2f} €**  "
+            f"(**-{deal['discount']}%**)"
+        )
 
     embed = discord.Embed(title=title, description=desc, url=deal["url"], color=color)
     embed.set_author(name="Steam Store", icon_url="https://i.imgur.com/xxr2UMQ.png")
     if deal.get("image"):
         embed.set_image(url=deal["image"])
-    embed.add_field(name="🛒 Kúp teraz", value=f"[Otvoriť na Steame]({deal['url']})", inline=False)
+    embed.add_field(name="🛒 Získaj teraz", value=f"[Otvoriť na Steame]({deal['url']})", inline=False)
     embed.set_footer(text=f"GameDealsBot • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     return embed
 
