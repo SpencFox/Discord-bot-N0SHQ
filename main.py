@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # ══════════════════════════════════════════
@@ -13,10 +14,6 @@ load_dotenv()
 # ══════════════════════════════════════════
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-
-# ID kanála, kam bot bude posielať správy
-# Ako ho získať: Zapni Developer Mode v Discorde (Settings > Advanced),
-# klikni pravým tlačidlom na kanál > Copy Channel ID
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 # Minimálna zľava na Steame (v %), ktorú bot nahlási
@@ -33,6 +30,7 @@ SEEN_GAMES_FILE = "seen_games.json"
 # ══════════════════════════════════════════
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 def load_seen_games():
@@ -127,12 +125,11 @@ async def get_epic_free_games():
 
 
 # ══════════════════════════════════════════
-#  STEAM – Veľké zľavy (cez IsThereAnyDeal API alebo SteamSpy fallback)
+#  STEAM – Veľké zľavy (Steam Search API)
 # ══════════════════════════════════════════
 
 async def get_steam_deals():
-    # Používame SteamStorefront featured endpoint – nevyžaduje API kľúč
-    url = "https://store.steampowered.com/api/featuredcategories/?cc=sk&l=sk"
+    url = "https://store.steampowered.com/search/results/?specials=1&json=1&count=50&cc=sk"
     deals = []
     try:
         async with aiohttp.ClientSession() as session:
@@ -141,22 +138,23 @@ async def get_steam_deals():
                     return deals
                 data = await resp.json(content_type=None)
 
-        # Kategórie: specials = veľké zľavy
-        specials = data.get("specials", {}).get("items", [])
-        for item in specials:
+        items = data.get("items", [])
+        for item in items:
+            name = item.get("name", "")
+            appid = str(item.get("id", ""))
             discount = item.get("discount_percent", 0)
+
             if discount < MIN_STEAM_DISCOUNT:
                 continue
 
-            appid = item.get("id")
-            title = item.get("name", "Neznáma hra")
-            original = item.get("original_price", 0) / 100
-            final = item.get("final_price", 0) / 100
-            img = item.get("large_capsule_image") or item.get("small_capsule_image") or ""
+            price_data = item.get("price") or {}
+            original = price_data.get("initial", 0) / 100
+            final = price_data.get("final", 0) / 100
+            img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
             url_game = f"https://store.steampowered.com/app/{appid}/"
 
             deals.append({
-                "title": title,
+                "title": name,
                 "url": url_game,
                 "image": img,
                 "discount": discount,
@@ -164,7 +162,7 @@ async def get_steam_deals():
                 "final_price": final,
                 "type": "steam_deal",
                 "source": "Steam",
-                "appid": str(appid),
+                "appid": appid,
             })
     except Exception as e:
         print(f"[Steam] Chyba: {e}")
@@ -322,7 +320,6 @@ async def on_ready():
     print(f"⏱  Interval kontroly: každých {CHECK_INTERVAL_HOURS} hodín")
     print(f"💸 Min. Steam zľava: {MIN_STEAM_DISCOUNT}%")
     periodic_check.start()
-    # Prvá kontrola hneď po štarte
     await asyncio.sleep(3)
     await check_and_post()
 
