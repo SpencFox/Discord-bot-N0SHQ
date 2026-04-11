@@ -136,68 +136,76 @@ async def get_epic_free_games():
 async def get_steam_deals():
     deals = []
 
-    # --- Free hry (100% zľava) ---
-    free_url = "https://store.steampowered.com/search/results/?maxprice=free&specials=1&json=1&count=20&cc=sk"
+    # --- Free hry cez Steam Store API ---
+    free_url = "https://store.steampowered.com/api/featuredcategories/?cc=sk&l=english"
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             async with session.get(free_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                print(f"[Steam Featured] Status: {resp.status}")
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    for item in data.get("items", []):
+                    specials = data.get("specials", {}).get("items", [])
+                    print(f"[Steam Featured] Počet položiek: {len(specials)}")
+                    for item in specials:
+                        discount = item.get("discount_percent", 0)
                         appid = str(item.get("id", ""))
                         name = item.get("name", "")
                         if not appid or not name:
                             continue
-                        img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+                        original = item.get("original_price", 0) / 100
+                        final = item.get("final_price", 0) / 100
+                        img = item.get("large_capsule_image") or f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
                         url_game = f"https://store.steampowered.com/app/{appid}/"
-                        deals.append({
-                            "title": name,
-                            "url": url_game,
-                            "image": img,
-                            "discount": 100,
-                            "original_price": 0,
-                            "final_price": 0,
-                            "type": "steam_free",
-                            "source": "Steam",
-                            "appid": appid,
-                        })
-    except Exception as e:
-        print(f"[Steam Free] Chyba: {e}")
 
-    # --- Veľké zľavy ---
-    deals_url = "https://store.steampowered.com/search/results/?specials=1&json=1&count=50&cc=sk"
+                        if discount == 100 or final == 0:
+                            deals.append({
+                                "title": name, "url": url_game, "image": img,
+                                "discount": 100, "original_price": original, "final_price": 0,
+                                "type": "steam_free", "source": "Steam", "appid": appid,
+                            })
+                        elif discount >= MIN_STEAM_DISCOUNT:
+                            deals.append({
+                                "title": name, "url": url_game, "image": img,
+                                "discount": discount, "original_price": original, "final_price": final,
+                                "type": "steam_deal", "source": "Steam", "appid": appid,
+                            })
+    except Exception as e:
+        print(f"[Steam Featured] Chyba: {e}")
+
+    # --- Záloha: IsThereAnyDeal API (nevyžaduje kľúč pre základné dáta) ---
+    itad_url = "https://api.isthereanydeal.com/v01/deals/list/?key=&offset=0&limit=20&region=sk&country=SK"
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(deals_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.get(itad_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                print(f"[ITAD] Status: {resp.status}")
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    for item in data.get("items", []):
-                        discount = item.get("discount_percent", 0)
-                        if discount < MIN_STEAM_DISCOUNT:
+                    list_data = data.get("data", {}).get("list", [])
+                    print(f"[ITAD] Počet položiek: {len(list_data)}")
+                    for item in list_data:
+                        price_new = item.get("price_new", 999)
+                        price_old = item.get("price_old", 0)
+                        if price_old == 0:
                             continue
-                        appid = str(item.get("id", ""))
-                        name = item.get("name", "")
-                        if not appid or not name:
+                        discount = round((1 - price_new / price_old) * 100)
+                        if price_new == 0:
+                            game_type = "steam_free"
+                        elif discount >= MIN_STEAM_DISCOUNT:
+                            game_type = "steam_deal"
+                        else:
                             continue
-                        price_data = item.get("price") or {}
-                        original = price_data.get("initial", 0) / 100
-                        final = price_data.get("final", 0) / 100
-                        img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
-                        url_game = f"https://store.steampowered.com/app/{appid}/"
+                        title = item.get("title", "")
+                        appid = str(item.get("plain", ""))
+                        url_game = item.get("url", "https://store.steampowered.com")
                         deals.append({
-                            "title": name,
-                            "url": url_game,
-                            "image": img,
-                            "discount": discount,
-                            "original_price": original,
-                            "final_price": final,
-                            "type": "steam_deal",
-                            "source": "Steam",
-                            "appid": appid,
+                            "title": title, "url": url_game, "image": "",
+                            "discount": discount, "original_price": price_old, "final_price": price_new,
+                            "type": game_type, "source": "Steam", "appid": f"itad_{appid}",
                         })
     except Exception as e:
-        print(f"[Steam Deals] Chyba: {e}")
+        print(f"[ITAD] Chyba: {e}")
 
+    print(f"[Steam] Celkom nájdených: {len(deals)}")
     return deals
 
 
