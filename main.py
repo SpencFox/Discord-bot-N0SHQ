@@ -120,7 +120,7 @@ async def get_steam_deals():
 
     # CheapShark: storeID=1 je Steam, sortBy=Savings, pageSize=60
     # Toto API je verejné a nevyžaduje žiadny kľúč
-    url = "https://www.cheapshark.com/api/1.0/deals?storeID=1&pageSize=60&sortBy=Savings&desc=1"
+    url = "https://www.cheapshark.com/api/1.0/deals?storeID=1&pageSize=60&sortBy=Savings&desc=1&lowerPrice=0&upperPrice=60&minRating=0"
 
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -134,20 +134,24 @@ async def get_steam_deals():
 
         # DEBUG - zobraz prvých 5 hier a ich zľavy
         for item in data[:5]:
-            print(f"[DEBUG] {item.get('title')} | savings={item.get('savings')} | salePrice={item.get('salePrice')} | normalPrice={item.get('normalPrice')}")
+            sale_p = float(item.get("salePrice", 0))
+            norm_p = float(item.get("normalPrice", 0))
+            calc_savings = round((1 - sale_p / norm_p) * 100) if norm_p > 0 else 0
+            print(f"[DEBUG] {item.get('title')} | vypočítaná zľava={calc_savings}% | {norm_p}€ → {sale_p}€")
 
         for item in data:
-            savings = float(item.get("savings", 0))
-            if savings < MIN_STEAM_DISCOUNT:
-                continue
-
             title = item.get("title", "")
             steam_appid = item.get("steamAppID", "")
             deal_id = item.get("dealID", "")
             sale_price = float(item.get("salePrice", 0))
             normal_price = float(item.get("normalPrice", 0))
 
-            if not title:
+            if not title or normal_price == 0:
+                continue
+
+            savings = round((1 - sale_price / normal_price) * 100)
+
+            if savings < MIN_STEAM_DISCOUNT:
                 continue
 
             # URL priamo na Steam ak máme appID, inak CheapShark redirect
