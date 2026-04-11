@@ -16,13 +16,8 @@ load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-# Minimálna zľava na Steame (v %), ktorú bot nahlási
 MIN_STEAM_DISCOUNT = 75
-
-# Ako často kontrolovať (v hodinách)
 CHECK_INTERVAL_HOURS = 6
-
-# Súbor na ukladanie již oznámených hier (aby sa neopakovali)
 SEEN_GAMES_FILE = "seen_games.json"
 
 HEADERS = {
@@ -50,7 +45,7 @@ def save_seen_games(seen: set):
 seen_games = load_seen_games()
 
 # ══════════════════════════════════════════
-#  EPIC GAMES – Free Games
+#  EPIC GAMES
 # ══════════════════════════════════════════
 
 async def get_epic_free_games():
@@ -110,16 +105,14 @@ async def get_epic_free_games():
         print(f"[Epic] Chyba: {e}")
     return games
 
-
 # ══════════════════════════════════════════
-#  STEAM – Featured + Specials API
+#  STEAM
 # ══════════════════════════════════════════
 
 async def get_steam_deals():
     deals = []
     seen_appids = set()
 
-    # Načítame viacero kategórií naraz
     categories_url = "https://store.steampowered.com/api/featuredcategories/?cc=sk&l=english"
 
     try:
@@ -130,9 +123,7 @@ async def get_steam_deals():
                     return deals
                 data = await resp.json(content_type=None)
 
-        # Kategórie ktoré chceme spracovať
         category_keys = ["specials", "top_sellers", "new_releases", "coming_soon"]
-
         all_items = []
         for key in category_keys:
             items = data.get(key, {}).get("items", [])
@@ -144,40 +135,26 @@ async def get_steam_deals():
             if not appid or appid in seen_appids:
                 continue
 
-            discount = item.get("discount_percent", 0)
-            final_price = item.get("final_price", 0)
-            original_price = item.get("original_price", 0)
             name = item.get("name", "")
-
             if not name:
                 continue
 
-            original_eur = (original_price or 0) / 100
-            final_eur = (final_price or 0) / 100
-            img = item.get("large_capsule_image") or item.get("small_capsule_image") or \
-                  f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
-            url_game = f"https://store.steampowered.com/app/{appid}/"
-
-            # Free hry (100% zľava alebo cena 0)
             discount = item.get("discount_percent") or 0
             final_price = item.get("final_price") or 0
             original_price = item.get("original_price") or 0
-            name = item.get("name", "")
-
-            if not name:
-                continue
-
             original_eur = original_price / 100
             final_eur = final_price / 100
+            img = (item.get("large_capsule_image") or item.get("small_capsule_image") or
+                   f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg")
+            url_game = f"https://store.steampowered.com/app/{appid}/"
 
             if discount == 100 or (final_price == 0 and original_price > 0):
                 seen_appids.add(appid)
-                deals.append({...})
-            elif discount >= MIN_STEAM_DISCOUNT:
-                seen_appids.add(appid)
-                deals.append({...})
-
-            # Veľké zľavy
+                deals.append({
+                    "title": name, "url": url_game, "image": img,
+                    "discount": 100, "original_price": original_eur, "final_price": 0,
+                    "type": "steam_free", "appid": appid,
+                })
             elif discount >= MIN_STEAM_DISCOUNT:
                 seen_appids.add(appid)
                 deals.append({
@@ -191,7 +168,7 @@ async def get_steam_deals():
     except Exception as e:
         print(f"[Steam] Chyba: {e}")
 
-    # Záloha — Steam Specials stránka
+    # Záloha ak nič nenašlo
     if len(deals) == 0:
         print("[Steam] Skúšam záložný endpoint...")
         try:
@@ -205,13 +182,18 @@ async def get_steam_deals():
                                 appid = str(item.get("id", ""))
                                 if not appid or appid in seen_appids:
                                     continue
-                                discount = item.get("discount_percent", 0)
+                                discount = item.get("discount_percent") or 0
+                                final_price = item.get("final_price") or 0
+                                original_price = item.get("original_price") or 0
                                 if discount < MIN_STEAM_DISCOUNT and discount != 100:
                                     continue
                                 name = item.get("name", "")
-                                original_eur = item.get("original_price", 0) / 100
-                                final_eur = item.get("final_price", 0) / 100
-                                img = item.get("large_capsule_image") or f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+                                if not name:
+                                    continue
+                                original_eur = original_price / 100
+                                final_eur = final_price / 100
+                                img = (item.get("large_capsule_image") or
+                                       f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg")
                                 url_game = f"https://store.steampowered.com/app/{appid}/"
                                 game_type = "steam_free" if discount == 100 else "steam_deal"
                                 seen_appids.add(appid)
@@ -225,7 +207,6 @@ async def get_steam_deals():
             print(f"[Steam] Záloha chyba: {e}")
 
     return deals
-
 
 # ══════════════════════════════════════════
 #  EMBED TVORBA
@@ -295,7 +276,6 @@ def make_steam_embed(deal: dict) -> discord.Embed:
     embed.set_footer(text=f"GameDealsBot • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     return embed
 
-
 # ══════════════════════════════════════════
 #  HLAVNÁ KONTROLA
 # ══════════════════════════════════════════
@@ -309,7 +289,6 @@ async def check_and_post():
 
     new_count = 0
 
-    # --- Epic Games ---
     epic_games = await get_epic_free_games()
     for game in epic_games:
         uid = f"epic_{game['type']}_{game['title']}"
@@ -321,7 +300,6 @@ async def check_and_post():
         new_count += 1
         await asyncio.sleep(1)
 
-    # --- Steam ---
     steam_deals = await get_steam_deals()
     for deal in steam_deals:
         uid = f"steam_{deal['appid']}_{deal['discount']}"
@@ -336,7 +314,6 @@ async def check_and_post():
     save_seen_games(seen_games)
     print(f"[Bot] Kontrola dokončená. Nových oznámení: {new_count}")
 
-
 # ══════════════════════════════════════════
 #  ÚLOHA
 # ══════════════════════════════════════════
@@ -345,7 +322,6 @@ async def check_and_post():
 async def periodic_check():
     print(f"[Bot] Spúšťam pravidelú kontrolu ({datetime.now().strftime('%d.%m.%Y %H:%M')})...")
     await check_and_post()
-
 
 # ══════════════════════════════════════════
 #  PRÍKAZY
@@ -373,7 +349,6 @@ async def status(ctx):
     embed.add_field(name="Kanál", value=f"<#{CHANNEL_ID}>", inline=False)
     embed.set_footer(text=f"Čas: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     await ctx.send(embed=embed)
-
 
 # ══════════════════════════════════════════
 #  SPUSTENIE
