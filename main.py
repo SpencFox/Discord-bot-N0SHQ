@@ -120,7 +120,7 @@ async def get_steam_deals():
 
     # CheapShark: storeID=1 je Steam, sortBy=Savings, pageSize=60
     # Toto API je verejné a nevyžaduje žiadny kľúč
-    url = "https://www.cheapshark.com/api/1.0/deals?storeID=1&pageSize=60&sortBy=Savings&desc=1&lowerPrice=0&upperPrice=60&minRating=0"
+    url = "https://www.cheapshark.com/api/1.0/deals?storeID=1&pageSize=60&sortBy=Recent&desc=1&upperPrice=30"
 
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -146,8 +146,8 @@ async def get_steam_deals():
             sale_price = float(item.get("salePrice", 0))
             normal_price = float(item.get("normalPrice", 0))
 
-            if not title or normal_price == 0:
-                continue
+            if not title or normal_price == 0 or sale_price >= normal_price:
+                continue  # preskočí hry bez zľavy
 
             savings = round((1 - sale_price / normal_price) * 100)
 
