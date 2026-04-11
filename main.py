@@ -152,8 +152,8 @@ async def get_steam_deals():
             if not name:
                 continue
 
-            original_eur = original_price / 100
-            final_eur = final_price / 100
+            original_eur = (original_price or 0) / 100
+            final_eur = (final_price or 0) / 100
             img = item.get("large_capsule_image") or item.get("small_capsule_image") or \
                   f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
             url_game = f"https://store.steampowered.com/app/{appid}/"
