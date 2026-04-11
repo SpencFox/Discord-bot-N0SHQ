@@ -4,7 +4,7 @@ import aiohttp
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,7 +25,6 @@ CHECK_INTERVAL_HOURS = 6
 # Súbor na ukladanie již oznámených hier (aby sa neopakovali)
 SEEN_GAMES_FILE = "seen_games.json"
 
-# User-Agent aby Steam neblokoval requesty
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
 }
@@ -51,7 +50,7 @@ def save_seen_games(seen: set):
 seen_games = load_seen_games()
 
 # ══════════════════════════════════════════
-#  EPIC GAMES – Free Games (oficiálne API)
+#  EPIC GAMES – Free Games
 # ══════════════════════════════════════════
 
 async def get_epic_free_games():
@@ -64,6 +63,7 @@ async def get_epic_free_games():
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status != 200:
+                    print(f"[Epic] HTTP {resp.status}")
                     return games
                 data = await resp.json()
 
@@ -76,136 +76,104 @@ async def get_epic_free_games():
 
         for game in elements:
             promotions = game.get("promotions") or {}
-            offers = promotions.get("promotionalOffers", [])
-            upcoming = promotions.get("upcomingPromotionalOffers", [])
 
-            # Aktuálne free hry
-            for promo in offers:
+            for promo in promotions.get("promotionalOffers", []):
                 for offer in promo.get("promotionalOffers", []):
-                    discount = offer.get("discountSetting", {}).get("discountPercentage", 100)
-                    if discount == 0:
+                    if offer.get("discountSetting", {}).get("discountPercentage", 100) == 0:
                         title = game.get("title", "Neznáma hra")
                         slug = game.get("productSlug") or game.get("urlSlug") or ""
                         url_game = f"https://store.epicgames.com/en-US/p/{slug}" if slug else "https://store.epicgames.com/en-US/free-games"
-                        img = ""
-                        for ki in game.get("keyImages", []):
-                            if ki.get("type") in ("Thumbnail", "DieselStoreFrontWide", "OfferImageWide"):
-                                img = ki.get("url", "")
-                                break
-                        end_date = offer.get("endDate", "")
+                        img = next((ki.get("url", "") for ki in game.get("keyImages", [])
+                                    if ki.get("type") in ("Thumbnail", "DieselStoreFrontWide", "OfferImageWide")), "")
                         games.append({
-                            "title": title,
-                            "url": url_game,
-                            "image": img,
-                            "end_date": end_date,
+                            "title": title, "url": url_game, "image": img,
+                            "end_date": offer.get("endDate", ""),
                             "type": "epic_free",
-                            "source": "Epic Games",
                         })
 
-            # Budúce free hry (preview)
-            for promo in upcoming:
+            for promo in promotions.get("upcomingPromotionalOffers", []):
                 for offer in promo.get("promotionalOffers", []):
-                    discount = offer.get("discountSetting", {}).get("discountPercentage", 100)
-                    if discount == 0:
+                    if offer.get("discountSetting", {}).get("discountPercentage", 100) == 0:
                         title = game.get("title", "Neznáma hra")
                         slug = game.get("productSlug") or game.get("urlSlug") or ""
                         url_game = f"https://store.epicgames.com/en-US/p/{slug}" if slug else "https://store.epicgames.com/en-US/free-games"
-                        img = ""
-                        for ki in game.get("keyImages", []):
-                            if ki.get("type") in ("Thumbnail", "DieselStoreFrontWide", "OfferImageWide"):
-                                img = ki.get("url", "")
-                                break
-                        start_date = offer.get("startDate", "")
+                        img = next((ki.get("url", "") for ki in game.get("keyImages", [])
+                                    if ki.get("type") in ("Thumbnail", "DieselStoreFrontWide", "OfferImageWide")), "")
                         games.append({
-                            "title": title,
-                            "url": url_game,
-                            "image": img,
-                            "start_date": start_date,
+                            "title": title, "url": url_game, "image": img,
+                            "start_date": offer.get("startDate", ""),
                             "type": "epic_upcoming",
-                            "source": "Epic Games (čoskoro)",
                         })
+
+        print(f"[Epic] Nájdených: {len(games)}")
     except Exception as e:
         print(f"[Epic] Chyba: {e}")
     return games
 
 
 # ══════════════════════════════════════════
-#  STEAM – Free hry + Veľké zľavy
+#  STEAM – cez CheapShark API (funguje zo serverov)
 # ══════════════════════════════════════════
 
 async def get_steam_deals():
     deals = []
 
-    # --- Free hry cez Steam Store API ---
-    free_url = "https://store.steampowered.com/api/featuredcategories/?cc=sk&l=english"
+    # CheapShark: storeID=1 je Steam, sortBy=Savings, pageSize=60
+    # Toto API je verejné a nevyžaduje žiadny kľúč
+    url = "https://www.cheapshark.com/api/1.0/deals?storeID=1&pageSize=60&sortBy=Savings&desc=1"
+
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(free_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                print(f"[Steam Featured] Status: {resp.status}")
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    specials = data.get("specials", {}).get("items", [])
-                    print(f"[Steam Featured] Počet položiek: {len(specials)}")
-                    for item in specials:
-                        discount = item.get("discount_percent", 0)
-                        appid = str(item.get("id", ""))
-                        name = item.get("name", "")
-                        if not appid or not name:
-                            continue
-                        original = item.get("original_price", 0) / 100
-                        final = item.get("final_price", 0) / 100
-                        img = item.get("large_capsule_image") or f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
-                        url_game = f"https://store.steampowered.com/app/{appid}/"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                print(f"[CheapShark] HTTP status: {resp.status}")
+                if resp.status != 200:
+                    return deals
+                data = await resp.json(content_type=None)
 
-                        if discount == 100 or final == 0:
-                            deals.append({
-                                "title": name, "url": url_game, "image": img,
-                                "discount": 100, "original_price": original, "final_price": 0,
-                                "type": "steam_free", "source": "Steam", "appid": appid,
-                            })
-                        elif discount >= MIN_STEAM_DISCOUNT:
-                            deals.append({
-                                "title": name, "url": url_game, "image": img,
-                                "discount": discount, "original_price": original, "final_price": final,
-                                "type": "steam_deal", "source": "Steam", "appid": appid,
-                            })
+        print(f"[CheapShark] Nájdených položiek: {len(data)}")
+
+        for item in data:
+            savings = float(item.get("savings", 0))
+            if savings < MIN_STEAM_DISCOUNT:
+                continue
+
+            title = item.get("title", "")
+            steam_appid = item.get("steamAppID", "")
+            deal_id = item.get("dealID", "")
+            sale_price = float(item.get("salePrice", 0))
+            normal_price = float(item.get("normalPrice", 0))
+
+            if not title:
+                continue
+
+            # URL priamo na Steam ak máme appID, inak CheapShark redirect
+            if steam_appid:
+                url_game = f"https://store.steampowered.com/app/{steam_appid}/"
+                img = f"https://cdn.akamai.steamstatic.com/steam/apps/{steam_appid}/header.jpg"
+                appid_key = steam_appid
+            else:
+                url_game = f"https://www.cheapshark.com/redirect?dealID={deal_id}"
+                img = item.get("thumb", "")
+                appid_key = f"cs_{deal_id}"
+
+            game_type = "steam_free" if sale_price == 0 else "steam_deal"
+
+            deals.append({
+                "title": title,
+                "url": url_game,
+                "image": img,
+                "discount": round(savings),
+                "original_price": normal_price,
+                "final_price": sale_price,
+                "type": game_type,
+                "appid": appid_key,
+            })
+
+        print(f"[CheapShark] Po filtrovaní ({MIN_STEAM_DISCOUNT}%+): {len(deals)}")
+
     except Exception as e:
-        print(f"[Steam Featured] Chyba: {e}")
+        print(f"[CheapShark] Chyba: {e}")
 
-    # --- Záloha: IsThereAnyDeal API (nevyžaduje kľúč pre základné dáta) ---
-    itad_url = "https://api.isthereanydeal.com/v01/deals/list/?key=&offset=0&limit=20&region=sk&country=SK"
-    try:
-        async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(itad_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                print(f"[ITAD] Status: {resp.status}")
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    list_data = data.get("data", {}).get("list", [])
-                    print(f"[ITAD] Počet položiek: {len(list_data)}")
-                    for item in list_data:
-                        price_new = item.get("price_new", 999)
-                        price_old = item.get("price_old", 0)
-                        if price_old == 0:
-                            continue
-                        discount = round((1 - price_new / price_old) * 100)
-                        if price_new == 0:
-                            game_type = "steam_free"
-                        elif discount >= MIN_STEAM_DISCOUNT:
-                            game_type = "steam_deal"
-                        else:
-                            continue
-                        title = item.get("title", "")
-                        appid = str(item.get("plain", ""))
-                        url_game = item.get("url", "https://store.steampowered.com")
-                        deals.append({
-                            "title": title, "url": url_game, "image": "",
-                            "discount": discount, "original_price": price_old, "final_price": price_new,
-                            "type": game_type, "source": "Steam", "appid": f"itad_{appid}",
-                        })
-    except Exception as e:
-        print(f"[ITAD] Chyba: {e}")
-
-    print(f"[Steam] Celkom nájdených: {len(deals)}")
     return deals
 
 
@@ -219,7 +187,7 @@ def make_epic_embed(game: dict) -> discord.Embed:
 
     if is_upcoming:
         title = f"🔜 Čoskoro zadarmo: {game['title']}"
-        desc = f"Táto hra bude čoskoro dostupná **zadarmo** na Epic Games Store!"
+        desc = "Táto hra bude čoskoro dostupná **zadarmo** na Epic Games Store!"
         start = game.get("start_date", "")
         if start:
             try:
@@ -303,7 +271,7 @@ async def check_and_post():
         new_count += 1
         await asyncio.sleep(1)
 
-    # --- Steam ---
+    # --- Steam cez CheapShark ---
     steam_deals = await get_steam_deals()
     for deal in steam_deals:
         uid = f"steam_{deal['appid']}_{deal['discount']}"
@@ -320,7 +288,7 @@ async def check_and_post():
 
 
 # ══════════════════════════════════════════
-#  ÚLOHA (opakuje sa každých N hodín)
+#  ÚLOHA
 # ══════════════════════════════════════════
 
 @tasks.loop(hours=CHECK_INTERVAL_HOURS)
@@ -335,22 +303,19 @@ async def periodic_check():
 
 @bot.command(name="check")
 async def manual_check(ctx):
-    """Manuálna kontrola hier (!check)"""
     await ctx.send("🔍 Kontrolujem hry a zľavy...")
     await check_and_post()
     await ctx.send("✅ Hotovo!")
 
 @bot.command(name="clearhistory")
 async def clear_history(ctx):
-    """Vymazanie histórie videných hier (!clearhistory)"""
     global seen_games
     seen_games = set()
     save_seen_games(seen_games)
-    await ctx.send("🗑️ História videných hier bola vymazaná. Ďalšia kontrola ukáže všetko znova.")
+    await ctx.send("🗑️ História vymazaná. Ďalšia kontrola ukáže všetko znova.")
 
 @bot.command(name="status")
 async def status(ctx):
-    """Informácie o bote (!status)"""
     embed = discord.Embed(title="🤖 GameDeals Bot – Status", color=0x9B59B6)
     embed.add_field(name="Kontrola každých", value=f"{CHECK_INTERVAL_HOURS} hodín", inline=True)
     embed.add_field(name="Min. Steam zľava", value=f"{MIN_STEAM_DISCOUNT}%", inline=True)
