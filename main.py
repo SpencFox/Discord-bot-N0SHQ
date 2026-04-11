@@ -17,7 +17,7 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 # Minimálna zľava na Steame (v %), ktorú bot nahlási
-MIN_STEAM_DISCOUNT = 50
+MIN_STEAM_DISCOUNT = 75
 
 # Ako často kontrolovať (v hodinách)
 CHECK_INTERVAL_HOURS = 6
@@ -112,75 +112,107 @@ async def get_epic_free_games():
 
 
 # ══════════════════════════════════════════
-#  STEAM – cez CheapShark API (funguje zo serverov)
+#  STEAM – Featured + Specials API
 # ══════════════════════════════════════════
 
 async def get_steam_deals():
     deals = []
+    seen_appids = set()
 
-    # CheapShark: storeID=1 je Steam, sortBy=Savings, pageSize=60
-    # Toto API je verejné a nevyžaduje žiadny kľúč
-    url = "https://www.cheapshark.com/api/1.0/deals?storeID=1&pageSize=60&sortBy=Recent&desc=1&upperPrice=30"
+    # Načítame viacero kategórií naraz
+    categories_url = "https://store.steampowered.com/api/featuredcategories/?cc=sk&l=english"
 
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                print(f"[CheapShark] HTTP status: {resp.status}")
+            async with session.get(categories_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                print(f"[Steam] HTTP status: {resp.status}")
                 if resp.status != 200:
                     return deals
                 data = await resp.json(content_type=None)
 
-        print(f"[CheapShark] Nájdených položiek: {len(data)}")
+        # Kategórie ktoré chceme spracovať
+        category_keys = ["specials", "top_sellers", "new_releases", "coming_soon"]
 
-        # DEBUG - zobraz prvých 5 hier a ich zľavy
-        for item in data[:5]:
-            sale_p = float(item.get("salePrice", 0))
-            norm_p = float(item.get("normalPrice", 0))
-            calc_savings = round((1 - sale_p / norm_p) * 100) if norm_p > 0 else 0
-            print(f"[DEBUG] {item.get('title')} | vypočítaná zľava={calc_savings}% | {norm_p}€ → {sale_p}€")
+        all_items = []
+        for key in category_keys:
+            items = data.get(key, {}).get("items", [])
+            print(f"[Steam] Kategória '{key}': {len(items)} položiek")
+            all_items.extend(items)
 
-        for item in data:
-            title = item.get("title", "")
-            steam_appid = item.get("steamAppID", "")
-            deal_id = item.get("dealID", "")
-            sale_price = float(item.get("salePrice", 0))
-            normal_price = float(item.get("normalPrice", 0))
-
-            if not title or normal_price == 0 or sale_price >= normal_price:
-                continue  # preskočí hry bez zľavy
-
-            savings = round((1 - sale_price / normal_price) * 100)
-
-            if savings < MIN_STEAM_DISCOUNT:
+        for item in all_items:
+            appid = str(item.get("id", ""))
+            if not appid or appid in seen_appids:
                 continue
 
-            # URL priamo na Steam ak máme appID, inak CheapShark redirect
-            if steam_appid:
-                url_game = f"https://store.steampowered.com/app/{steam_appid}/"
-                img = f"https://cdn.akamai.steamstatic.com/steam/apps/{steam_appid}/header.jpg"
-                appid_key = steam_appid
-            else:
-                url_game = f"https://www.cheapshark.com/redirect?dealID={deal_id}"
-                img = item.get("thumb", "")
-                appid_key = f"cs_{deal_id}"
+            discount = item.get("discount_percent", 0)
+            final_price = item.get("final_price", 0)
+            original_price = item.get("original_price", 0)
+            name = item.get("name", "")
 
-            game_type = "steam_free" if sale_price == 0 else "steam_deal"
+            if not name:
+                continue
 
-            deals.append({
-                "title": title,
-                "url": url_game,
-                "image": img,
-                "discount": round(savings),
-                "original_price": normal_price,
-                "final_price": sale_price,
-                "type": game_type,
-                "appid": appid_key,
-            })
+            original_eur = original_price / 100
+            final_eur = final_price / 100
+            img = item.get("large_capsule_image") or item.get("small_capsule_image") or \
+                  f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+            url_game = f"https://store.steampowered.com/app/{appid}/"
 
-        print(f"[CheapShark] Po filtrovaní ({MIN_STEAM_DISCOUNT}%+): {len(deals)}")
+            # Free hry (100% zľava alebo cena 0)
+            if discount == 100 or final_price == 0 and original_price > 0:
+                seen_appids.add(appid)
+                deals.append({
+                    "title": name, "url": url_game, "image": img,
+                    "discount": 100, "original_price": original_eur, "final_price": 0,
+                    "type": "steam_free", "appid": appid,
+                })
+
+            # Veľké zľavy
+            elif discount >= MIN_STEAM_DISCOUNT:
+                seen_appids.add(appid)
+                deals.append({
+                    "title": name, "url": url_game, "image": img,
+                    "discount": discount, "original_price": original_eur, "final_price": final_eur,
+                    "type": "steam_deal", "appid": appid,
+                })
+
+        print(f"[Steam] Celkom nájdených po filtrovaní: {len(deals)}")
 
     except Exception as e:
-        print(f"[CheapShark] Chyba: {e}")
+        print(f"[Steam] Chyba: {e}")
+
+    # Záloha — Steam Specials stránka
+    if len(deals) == 0:
+        print("[Steam] Skúšam záložný endpoint...")
+        try:
+            backup_url = "https://store.steampowered.com/api/featured/?cc=sk&l=english"
+            async with aiohttp.ClientSession(headers=HEADERS) as session:
+                async with session.get(backup_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        for category in ["large_capsules", "featured_win", "featured_mac", "featured_linux"]:
+                            for item in data.get(category, []):
+                                appid = str(item.get("id", ""))
+                                if not appid or appid in seen_appids:
+                                    continue
+                                discount = item.get("discount_percent", 0)
+                                if discount < MIN_STEAM_DISCOUNT and discount != 100:
+                                    continue
+                                name = item.get("name", "")
+                                original_eur = item.get("original_price", 0) / 100
+                                final_eur = item.get("final_price", 0) / 100
+                                img = item.get("large_capsule_image") or f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+                                url_game = f"https://store.steampowered.com/app/{appid}/"
+                                game_type = "steam_free" if discount == 100 else "steam_deal"
+                                seen_appids.add(appid)
+                                deals.append({
+                                    "title": name, "url": url_game, "image": img,
+                                    "discount": discount, "original_price": original_eur, "final_price": final_eur,
+                                    "type": game_type, "appid": appid,
+                                })
+            print(f"[Steam] Záloha nájdených: {len(deals)}")
+        except Exception as e:
+            print(f"[Steam] Záloha chyba: {e}")
 
     return deals
 
@@ -279,7 +311,7 @@ async def check_and_post():
         new_count += 1
         await asyncio.sleep(1)
 
-    # --- Steam cez CheapShark ---
+    # --- Steam ---
     steam_deals = await get_steam_deals()
     for deal in steam_deals:
         uid = f"steam_{deal['appid']}_{deal['discount']}"
