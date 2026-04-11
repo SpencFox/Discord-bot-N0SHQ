@@ -17,7 +17,7 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 # Minimálna zľava na Steame (v %), ktorú bot nahlási
-MIN_STEAM_DISCOUNT = 75
+MIN_STEAM_DISCOUNT = 50
 
 # Ako často kontrolovať (v hodinách)
 CHECK_INTERVAL_HOURS = 6
@@ -131,6 +131,10 @@ async def get_steam_deals():
                 data = await resp.json(content_type=None)
 
         print(f"[CheapShark] Nájdených položiek: {len(data)}")
+
+        # DEBUG - zobraz prvých 5 hier a ich zľavy
+        for item in data[:5]:
+            print(f"[DEBUG] {item.get('title')} | savings={item.get('savings')} | salePrice={item.get('salePrice')} | normalPrice={item.get('normalPrice')}")
 
         for item in data:
             savings = float(item.get("savings", 0))
