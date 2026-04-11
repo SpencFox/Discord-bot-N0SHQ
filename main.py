@@ -159,13 +159,23 @@ async def get_steam_deals():
             url_game = f"https://store.steampowered.com/app/{appid}/"
 
             # Free hry (100% zľava alebo cena 0)
-            if discount == 100 or final_price == 0 and original_price > 0:
+            discount = item.get("discount_percent") or 0
+            final_price = item.get("final_price") or 0
+            original_price = item.get("original_price") or 0
+            name = item.get("name", "")
+
+            if not name:
+                continue
+
+            original_eur = original_price / 100
+            final_eur = final_price / 100
+
+            if discount == 100 or (final_price == 0 and original_price > 0):
                 seen_appids.add(appid)
-                deals.append({
-                    "title": name, "url": url_game, "image": img,
-                    "discount": 100, "original_price": original_eur, "final_price": 0,
-                    "type": "steam_free", "appid": appid,
-                })
+                deals.append({...})
+            elif discount >= MIN_STEAM_DISCOUNT:
+                seen_appids.add(appid)
+                deals.append({...})
 
             # Veľké zľavy
             elif discount >= MIN_STEAM_DISCOUNT:
