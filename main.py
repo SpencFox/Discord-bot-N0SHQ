@@ -21,7 +21,10 @@ CHECK_INTERVAL_HOURS = 6
 SEEN_GAMES_FILE = "seen_games.json"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "application/json, text/javascript, */*",
+    "Referer": "https://store.steampowered.com/",
 }
 
 # ══════════════════════════════════════════
@@ -113,99 +116,126 @@ async def get_steam_deals():
     deals = []
     seen_appids = set()
 
-    categories_url = "https://store.steampowered.com/api/featuredcategories/?cc=sk&l=english"
-
+    # ── Endpoint 1: Featured Categories ──────────────────────────
     try:
+        url = "https://store.steampowered.com/api/featuredcategories/?cc=sk&l=english"
         async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(categories_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                print(f"[Steam] HTTP status: {resp.status}")
-                if resp.status != 200:
-                    return deals
-                data = await resp.json(content_type=None)
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                print(f"[Steam Featured] HTTP: {resp.status}")
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    for key in ["specials", "top_sellers", "new_releases", "coming_soon"]:
+                        items = data.get(key, {}).get("items", [])
+                        print(f"[Steam Featured] '{key}': {len(items)} položiek")
+                        for item in items:
+                            appid = str(item.get("id", ""))
+                            if not appid or appid in seen_appids:
+                                continue
+                            name = item.get("name", "")
+                            if not name:
+                                continue
+                            discount = item.get("discount_percent") or 0
+                            final_price = item.get("final_price") or 0
+                            original_price = item.get("original_price") or 0
+                            original_eur = original_price / 100
+                            final_eur = final_price / 100
+                            img = (item.get("large_capsule_image") or item.get("small_capsule_image") or
+                                   f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg")
+                            url_game = f"https://store.steampowered.com/app/{appid}/"
 
-        category_keys = ["specials", "top_sellers", "new_releases", "coming_soon"]
-        all_items = []
-        for key in category_keys:
-            items = data.get(key, {}).get("items", [])
-            print(f"[Steam] Kategória '{key}': {len(items)} položiek")
-            all_items.extend(items)
-
-        for item in all_items:
-            appid = str(item.get("id", ""))
-            if not appid or appid in seen_appids:
-                continue
-
-            name = item.get("name", "")
-            if not name:
-                continue
-
-            discount = item.get("discount_percent") or 0
-            final_price = item.get("final_price") or 0
-            original_price = item.get("original_price") or 0
-            original_eur = original_price / 100
-            final_eur = final_price / 100
-            img = (item.get("large_capsule_image") or item.get("small_capsule_image") or
-                   f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg")
-            url_game = f"https://store.steampowered.com/app/{appid}/"
-
-            if discount == 100 or (final_price == 0 and original_price > 0):
-                seen_appids.add(appid)
-                deals.append({
-                    "title": name, "url": url_game, "image": img,
-                    "discount": 100, "original_price": original_eur, "final_price": 0,
-                    "type": "steam_free", "appid": appid,
-                })
-            elif discount >= MIN_STEAM_DISCOUNT:
-                seen_appids.add(appid)
-                deals.append({
-                    "title": name, "url": url_game, "image": img,
-                    "discount": discount, "original_price": original_eur, "final_price": final_eur,
-                    "type": "steam_deal", "appid": appid,
-                })
-
-        print(f"[Steam] Celkom nájdených po filtrovaní: {len(deals)}")
-
-    except Exception as e:
-        print(f"[Steam] Chyba: {e}")
-
-    # Záloha ak nič nenašlo
-    if len(deals) == 0:
-        print("[Steam] Skúšam záložný endpoint...")
-        try:
-            backup_url = "https://store.steampowered.com/api/featured/?cc=sk&l=english"
-            async with aiohttp.ClientSession(headers=HEADERS) as session:
-                async with session.get(backup_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json(content_type=None)
-                        for category in ["large_capsules", "featured_win", "featured_mac", "featured_linux"]:
-                            for item in data.get(category, []):
-                                appid = str(item.get("id", ""))
-                                if not appid or appid in seen_appids:
-                                    continue
-                                discount = item.get("discount_percent") or 0
-                                final_price = item.get("final_price") or 0
-                                original_price = item.get("original_price") or 0
-                                if discount < MIN_STEAM_DISCOUNT and discount != 100:
-                                    continue
-                                name = item.get("name", "")
-                                if not name:
-                                    continue
-                                original_eur = original_price / 100
-                                final_eur = final_price / 100
-                                img = (item.get("large_capsule_image") or
-                                       f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg")
-                                url_game = f"https://store.steampowered.com/app/{appid}/"
-                                game_type = "steam_free" if discount == 100 else "steam_deal"
+                            if discount == 100 or (final_price == 0 and original_price > 0):
+                                seen_appids.add(appid)
+                                deals.append({
+                                    "title": name, "url": url_game, "image": img,
+                                    "discount": 100, "original_price": original_eur, "final_price": 0,
+                                    "type": "steam_free", "appid": appid,
+                                })
+                            elif discount >= MIN_STEAM_DISCOUNT:
                                 seen_appids.add(appid)
                                 deals.append({
                                     "title": name, "url": url_game, "image": img,
                                     "discount": discount, "original_price": original_eur, "final_price": final_eur,
-                                    "type": game_type, "appid": appid,
+                                    "type": "steam_deal", "appid": appid,
                                 })
-            print(f"[Steam] Záloha nájdených: {len(deals)}")
-        except Exception as e:
-            print(f"[Steam] Záloha chyba: {e}")
+    except Exception as e:
+        print(f"[Steam Featured] Chyba: {e}")
 
+    # ── Endpoint 2: Steam Featured (hlavná stránka) ───────────────
+    try:
+        url = "https://store.steampowered.com/api/featured/?cc=sk&l=english"
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                print(f"[Steam Main] HTTP: {resp.status}")
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    for category in ["large_capsules", "featured_win", "featured_mac", "featured_linux"]:
+                        for item in data.get(category, []):
+                            appid = str(item.get("id", ""))
+                            if not appid or appid in seen_appids:
+                                continue
+                            name = item.get("name", "")
+                            if not name:
+                                continue
+                            discount = item.get("discount_percent") or 0
+                            final_price = item.get("final_price") or 0
+                            original_price = item.get("original_price") or 0
+                            original_eur = original_price / 100
+                            final_eur = final_price / 100
+                            img = (item.get("large_capsule_image") or
+                                   f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg")
+                            url_game = f"https://store.steampowered.com/app/{appid}/"
+
+                            if discount == 100 or (final_price == 0 and original_price > 0):
+                                seen_appids.add(appid)
+                                deals.append({
+                                    "title": name, "url": url_game, "image": img,
+                                    "discount": 100, "original_price": original_eur, "final_price": 0,
+                                    "type": "steam_free", "appid": appid,
+                                })
+                            elif discount >= MIN_STEAM_DISCOUNT:
+                                seen_appids.add(appid)
+                                deals.append({
+                                    "title": name, "url": url_game, "image": img,
+                                    "discount": discount, "original_price": original_eur, "final_price": final_eur,
+                                    "type": "steam_deal", "appid": appid,
+                                })
+    except Exception as e:
+        print(f"[Steam Main] Chyba: {e}")
+
+    # ── Endpoint 3: Steam Search (free hry -100%) ─────────────────
+    try:
+        url = "https://store.steampowered.com/search/results/?specials=1&maxprice=free&json=1&count=50&cc=sk"
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                print(f"[Steam Free Search] HTTP: {resp.status}")
+                if resp.status == 200:
+                    text = await resp.text()
+                    # Skontroluj či je to JSON alebo HTML
+                    if text.strip().startswith("{") or text.strip().startswith("["):
+                        data = json.loads(text)
+                        items = data.get("items", [])
+                        print(f"[Steam Free Search] Nájdených: {len(items)}")
+                        for item in items:
+                            appid = str(item.get("id", ""))
+                            if not appid or appid in seen_appids:
+                                continue
+                            name = item.get("name", "")
+                            if not name:
+                                continue
+                            seen_appids.add(appid)
+                            img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+                            url_game = f"https://store.steampowered.com/app/{appid}/"
+                            deals.append({
+                                "title": name, "url": url_game, "image": img,
+                                "discount": 100, "original_price": 0, "final_price": 0,
+                                "type": "steam_free", "appid": appid,
+                            })
+                    else:
+                        print(f"[Steam Free Search] Dostal HTML namiesto JSON (Steam blokuje)")
+    except Exception as e:
+        print(f"[Steam Free Search] Chyba: {e}")
+
+    print(f"[Steam] Celkom nájdených: {len(deals)}")
     return deals
 
 # ══════════════════════════════════════════
