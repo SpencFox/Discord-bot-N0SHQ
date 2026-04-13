@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 import json
 import os
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -160,7 +161,7 @@ async def get_steam_deals():
     except Exception as e:
         print(f"[Steam Featured] Chyba: {e}")
 
-    # ── Endpoint 2: Steam Featured (hlavná stránka) ───────────────
+    # ── Endpoint 2: Steam Featured hlavná stránka ─────────────────
     try:
         url = "https://store.steampowered.com/api/featured/?cc=sk&l=english"
         async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -202,7 +203,7 @@ async def get_steam_deals():
     except Exception as e:
         print(f"[Steam Main] Chyba: {e}")
 
-    # ── Endpoint 3: Steam Search (free hry -100%) ─────────────────
+    # ── Endpoint 3: Steam Search free hry ────────────────────────
     try:
         url = "https://store.steampowered.com/search/results/?specials=1&maxprice=free&json=1&count=50&cc=sk"
         async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -210,12 +211,12 @@ async def get_steam_deals():
                 print(f"[Steam Free Search] HTTP: {resp.status}")
                 if resp.status == 200:
                     text = await resp.text()
-                    # Skontroluj či je to JSON alebo HTML
                     if text.strip().startswith("{") or text.strip().startswith("["):
                         data = json.loads(text)
                         items = data.get("items", [])
                         print(f"[Steam Free Search] Nájdených: {len(items)}")
                         for item in items:
+                            print(f"[Steam Free Search] Hra: {item.get('name')} | appid: {item.get('id')}")
                             appid = str(item.get("id", ""))
                             if not appid or appid in seen_appids:
                                 continue
@@ -234,6 +235,22 @@ async def get_steam_deals():
                         print(f"[Steam Free Search] Dostal HTML namiesto JSON (Steam blokuje)")
     except Exception as e:
         print(f"[Steam Free Search] Chyba: {e}")
+
+    # ── Endpoint 4: SteamDB RSS feed (TEST) ──────────────────────
+    try:
+        rss_url = "https://steamdb.info/sales/feed/"
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.get(rss_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                print(f"[SteamDB RSS] HTTP: {resp.status}")
+                if resp.status == 200:
+                    text = await resp.text()
+                    root = ET.fromstring(text)
+                    rss_items = root.findall(".//item")
+                    print(f"[SteamDB RSS] Nájdených: {len(rss_items)}")
+                    for rss_item in rss_items[:10]:
+                        print(f"[SteamDB RSS] {rss_item.findtext('title')}")
+    except Exception as e:
+        print(f"[SteamDB RSS] Chyba: {e}")
 
     print(f"[Steam] Celkom nájdených: {len(deals)}")
     return deals
