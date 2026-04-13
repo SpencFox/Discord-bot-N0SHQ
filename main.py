@@ -129,7 +129,7 @@ async def get_steam_deals():
                         items = data.get(key, {}).get("items", [])
                         print(f"[Steam Featured] '{key}': {len(items)} položiek")
                         for item in items:
-                            appid = str(item.get("id", ""))
+                            appid = str(item.get("appid") or item.get("id") or item.get("app_id") or "")
                             if not appid or appid in seen_appids:
                                 continue
                             name = item.get("name", "")
@@ -215,6 +215,8 @@ async def get_steam_deals():
                         data = json.loads(text)
                         items = data.get("items", [])
                         print(f"[Steam Free Search] Nájdených: {len(items)}")
+                        if len(items) > 0:
+                            print(f"[Steam Free Search] Kľúče prvej položky: {list(items[0].keys())}")
                         for item in items:
                             print(f"[Steam Free Search] Hra: {item.get('name')} | appid: {item.get('id')}")
                             appid = str(item.get("id", ""))
