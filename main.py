@@ -48,6 +48,19 @@ def save_seen_games(seen: set):
 
 seen_games = load_seen_games()
 
+def extract_appid_from_url(url: str) -> str:
+    """Vytiahne appid z Steam CDN URL ako .../steam/apps/248610/..."""
+    try:
+        parts = url.split("/")
+        for i, part in enumerate(parts):
+            if part == "apps" and i + 1 < len(parts):
+                candidate = parts[i + 1]
+                if candidate.isdigit():
+                    return candidate
+    except Exception:
+        pass
+    return ""
+
 # ══════════════════════════════════════════
 #  EPIC GAMES
 # ══════════════════════════════════════════
@@ -129,15 +142,7 @@ async def get_steam_deals():
                         items = data.get(key, {}).get("items", [])
                         print(f"[Steam Featured] '{key}': {len(items)} položiek")
                         for item in items:
-                            logo = item.get("logo", "")
-                            appid = ""
-                            if logo:
-                                # Extrahuj appid z URL: .../steam/apps/248610/capsule...
-                                parts = logo.split("/")
-                                for i, part in enumerate(parts):
-                                    if part == "apps" and i + 1 < len(parts):
-                                        appid = parts[i + 1]
-                                        break
+                            appid = str(item.get("id", ""))
                             if not appid or appid in seen_appids:
                                 continue
                             name = item.get("name", "")
@@ -211,7 +216,7 @@ async def get_steam_deals():
     except Exception as e:
         print(f"[Steam Main] Chyba: {e}")
 
-    # ── Endpoint 3: Steam Search free hry ────────────────────────
+    # ── Endpoint 3: Steam Search free hry (appid z logo URL) ──────
     try:
         url = "https://store.steampowered.com/search/results/?specials=1&maxprice=free&json=1&count=50&cc=sk"
         async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -223,16 +228,19 @@ async def get_steam_deals():
                         data = json.loads(text)
                         items = data.get("items", [])
                         print(f"[Steam Free Search] Nájdených: {len(items)}")
-                        if len(items) > 0:
-                            print(f"[Steam Free Search] Kľúče prvej položky: {list(items[0].keys())}")
                         for item in items:
-                            print(f"[Steam Free Search] Hra: {item.get('name')} | appid: {item.get('id')}")
-                            appid = str(item.get("id", ""))
-                            if not appid or appid in seen_appids:
-                                continue
                             name = item.get("name", "")
                             if not name:
                                 continue
+
+                            # Vytiahni appid z logo URL
+                            logo = item.get("logo", "")
+                            appid = extract_appid_from_url(logo)
+                            print(f"[Steam Free Search] Hra: {name} | appid: {appid} | logo: {logo[:60]}")
+
+                            if not appid or appid in seen_appids:
+                                continue
+
                             seen_appids.add(appid)
                             img = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
                             url_game = f"https://store.steampowered.com/app/{appid}/"
@@ -242,25 +250,9 @@ async def get_steam_deals():
                                 "type": "steam_free", "appid": appid,
                             })
                     else:
-                        print(f"[Steam Free Search] Dostal HTML namiesto JSON (Steam blokuje)")
+                        print(f"[Steam Free Search] Dostal HTML namiesto JSON")
     except Exception as e:
         print(f"[Steam Free Search] Chyba: {e}")
-
-    # ── Endpoint 4: SteamDB RSS feed (TEST) ──────────────────────
-    try:
-        rss_url = "https://steamdb.info/sales/feed/"
-        async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(rss_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                print(f"[SteamDB RSS] HTTP: {resp.status}")
-                if resp.status == 200:
-                    text = await resp.text()
-                    root = ET.fromstring(text)
-                    rss_items = root.findall(".//item")
-                    print(f"[SteamDB RSS] Nájdených: {len(rss_items)}")
-                    for rss_item in rss_items[:10]:
-                        print(f"[SteamDB RSS] {rss_item.findtext('title')}")
-    except Exception as e:
-        print(f"[SteamDB RSS] Chyba: {e}")
 
     print(f"[Steam] Celkom nájdených: {len(deals)}")
     return deals
