@@ -129,7 +129,15 @@ async def get_steam_deals():
                         items = data.get(key, {}).get("items", [])
                         print(f"[Steam Featured] '{key}': {len(items)} položiek")
                         for item in items:
-                            appid = str(item.get("appid") or item.get("id") or item.get("app_id") or "")
+                            logo = item.get("logo", "")
+                            appid = ""
+                            if logo:
+                                # Extrahuj appid z URL: .../steam/apps/248610/capsule...
+                                parts = logo.split("/")
+                                for i, part in enumerate(parts):
+                                    if part == "apps" and i + 1 < len(parts):
+                                        appid = parts[i + 1]
+                                        break
                             if not appid or appid in seen_appids:
                                 continue
                             name = item.get("name", "")
